@@ -1,5 +1,6 @@
 import streamlit as st
 
+# Global page configuration
 st.set_page_config(
     page_title="Tasty India - Clubhouse Canteen",
     page_icon="🍛",
@@ -7,7 +8,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Set up clean URL routes
+# Define the isolated view pages and their respective URLs
 order_page = st.Page(
     "views/order.py",
     title="Place Order",
@@ -15,13 +16,21 @@ order_page = st.Page(
     url_path="order",
     default=True,
 )
+
 admin_page = st.Page(
-    "views/admin.py", title="Kitchen & Admin", icon="🔐", url_path="admin"
+    "views/admin.py",
+    title="Kitchen & Admin",
+    icon="🔐",
+    url_path="admin",
 )
 
-# Navigation
+# Register pages inside the navigation menu
 pg = st.navigation(
-    {"Tasty India": [order_page], "Kitchen Management": [admin_page]}
+    {
+        "Tasty India": [order_page],
+        "Kitchen Management": [admin_page],
+    }
 )
 
+# Run current routed page
 pg.run()
