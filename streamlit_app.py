@@ -76,10 +76,10 @@ def load_orders(target_date):
         WHERE o.pickup_date::DATE = :target_date::DATE
         GROUP BY o.order_id, o.delivery_type, o.created_at, o.pickup_date, o.order_type, o.slot, o.flat_no, o.name, o.phone, o.total_inr, o.utr_ref, o.status
         ORDER BY o.created_at DESC;
-    """).bindparams(target_date=str(target_date))
-
+    """)
   with engine.connect() as conn:
-    return pd.read_sql(query, conn)
+    result = conn.execute(query, {"target_date": str(target_date)})
+    return pd.DataFrame(result.fetchall(), columns=result.keys())
 
 
 @st.cache_data(ttl=5)
@@ -93,10 +93,10 @@ def load_kitchen_summary(target_date):
         WHERE o.pickup_date::DATE = :target_date::DATE
         GROUP BY oi.item_name
         ORDER BY "Batch Quantity" DESC;
-    """).bindparams(target_date=str(target_date))
-
+    """)
   with engine.connect() as conn:
-    return pd.read_sql(query, conn)
+    result = conn.execute(query, {"target_date": str(target_date)})
+    return pd.DataFrame(result.fetchall(), columns=result.keys())
 
 
 def create_upi_intent(
