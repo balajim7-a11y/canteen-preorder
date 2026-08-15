@@ -11,7 +11,7 @@ import streamlit as st
 # ====================================================
 BRAND_NAME = "TASTY India"
 BRAND_TAGLINE = "Tasty South grp"
-UPI_ID = "yourfriend@upi"  # Replace with actual UPI VPA
+UPI_ID = "yourfriend@upi"  # Replace with actual UPI VPA (e.g. 9876543210@paytm)
 ADMIN_PIN = "5678"
 MIN_DELIVERY_AMOUNT = 150
 
@@ -156,7 +156,7 @@ with st.sidebar:
 if st.session_state.is_admin_mode:
   col_title, col_btn = st.columns([4, 1])
   with col_title:
-    st.title(f"🔐 {BRAND_NAME} — Admin Portal")
+    st.title(f"🔐 {BRAND_NAME} — Admin & Kitchen Portal")
   with col_btn:
     if st.button("Back to Order Page"):
       st.session_state.is_admin_mode = False
@@ -170,45 +170,227 @@ if st.session_state.is_admin_mode:
     )
 
     with admin_tab1:
-      filter_date = st.date_input("Filter Orders By Date", value=date.today())
+      col_f1, col_f2 = st.columns([1, 1])
+      with col_f1:
+        filter_date = st.date_input(
+            "📅 Filter Orders By Date",
+            value=date.today(),
+        )
+      with col_f2:
+        slot_filter = st.selectbox(
+            "⏰ Filter by Time Slot",
+            [
+                "All Slots",
+                "Breakfast",
+                "Lunch",
+                "Snacks",
+                "Dinner",
+                "Immediate / ASAP",
+            ],
+        )
+
       daily_orders = load_orders(filter_date)
 
-      m1, m2 = st.columns(2)
+      if not daily_orders.empty and slot_filter != "All Slots":
+        daily_orders = daily_orders[
+            daily_orders["slot"].str.contains(
+                slot_filter, case=False, na=False
+            )
+        ]
+
+      # Metrics summary
+      m1, m2, m3 = st.columns(3)
       m1.metric(
           "Total Orders", len(daily_orders) if not daily_orders.empty else 0
       )
       m2.metric(
-          "Total Revenue (₹)",
-          int(daily_orders["total_inr"].sum()) if not daily_orders.empty else 0,
+          "Total Revenue",
+          f"₹{int(daily_orders['total_inr'].sum()) if not daily_orders.empty else 0}",
       )
+      delivery_count = (
+          len(
+              daily_orders[
+                  daily_orders["delivery_type"] == "Doorstep Delivery"
+              ]
+          )
+          if not daily_orders.empty
+          else 0
+      )
+      m3.metric("Doorstep Deliveries 🛵", delivery_count)
 
-      st.markdown("---")
-      st.subheader(f"🥣 Batch Cooking Summary for {filter_date}")
-      summary_df = load_kitchen_summary(filter_date)
-      if not summary_df.empty:
-        st.dataframe(summary_df, hide_index=True, use_container_width=True)
-      else:
-        st.info("No items scheduled for this date.")
+      st.divider()
 
-      st.subheader("📋 Order Tickets")
+      # Section 1: Kitchen Batch Summary
+      with st.expander(
+          "🥣 **Batch Cooking Requirements (Total Counts)**", expanded=False
+      ):
+        summary_df = load_kitchen_summary(filter_date)
+        if not summary_df.empty:
+          st.dataframe(summary_df, hide_index=True, use_container_width=True)
+        else:
+          st.info("No items scheduled for cooking on this date.")
+
+      st.markdown("### 📋 Order Details & Ticket Inspector")
+
       if not daily_orders.empty:
-        st.dataframe(
-            daily_orders[[
-                "order_id",
-                "delivery_type",
-                "slot",
-                "flat_no",
-                "name",
-                "phone",
-                "items_ordered",
-                "total_inr",
-                "status",
-            ]],
-            hide_index=True,
-            use_container_width=True,
+        # Create user-friendly label for dropdown selector
+        order_options = {}
+        for _, o_row in daily_orders.iterrows():
+          badge = (
+              "🛵 Doorstep"
+              if "Doorstep" in str(o_row["delivery_type"])
+              else "🏢 Pickup"
+          )
+          label = (
+              f"#{o_row['order_id']} | Flat: {o_row['flat_no']} |"
+              f" {o_row['slot']} | {badge} | ₹{o_row['total_inr']}"
+          )
+          order_options[label] = o_row["order_id"]
+
+        selected_label = st.selectbox(
+            "👉 Select an Order to View Details:", list(order_options.keys())
         )
+        selected_order_id = order_options[selected_label]
+
+        # Fetch selected order data
+        selected_order = daily_orders[
+            daily_orders["order_id"] == selected_order_id
+        ].iloc[0]
+        is_delivery = "Doorstep" in str(selected_order["delivery_type"])
+
+        # Top Information Banner
+        st.markdown(
+            f"""
+            <div style="background-color: {'#FFF3E0' if is_delivery else '#E3F2FD'}; 
+                        padding: 16px; border-radius: 8px; margin: 12px 0; border: 1px solid {'#FFE0B2' if is_delivery else '#BBDEFB'};">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 1.4rem; font-weight: 800; color: #111;">Order #{selected_order['order_id']}</span>
+                    <span style="background: {'#D32F2F' if is_delivery else '#1565C0'}; color: #FFFFFF; font-weight: 700; padding: 4px 12px; border-radius: 20px; font-size: 0.9rem;">
+                        {'🛵 DOORSTEP DELIVERY' if is_delivery else '🏢 COUNTER PICKUP'}
+                    </span>
+                </div>
+                <div style="font-size: 1.05rem; color: #333; line-height: 1.6;">
+                    📍 <b>Flat / Door No:</b> <span style="font-size: 1.25rem; font-weight: 800; color: #D32F2F;">{selected_order['flat_no']}</span><br>
+                    ⏰ <b>Preferred Slot:</b> <span style="font-weight: 700;">{selected_order['slot']}</span><br>
+                    👤 <b>Resident:</b> {selected_order['name']} &nbsp;|&nbsp; 📞 <a href="tel:{selected_order['phone']}"><b>{selected_order['phone']}</b></a><br>
+                    💳 <b>Payment UTR / Ref:</b> <code>{selected_order['utr_ref']}</code>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Line-by-line item breakdown from order_items table
+        st.markdown("#### 🍴 Ordered Items Breakdown")
+        items_query = text("""
+            SELECT 
+                item_name AS "Dish / Item",
+                quantity AS "Qty",
+                unit_price AS "Price (₹)",
+                subtotal AS "Subtotal (₹)"
+            FROM order_items
+            WHERE order_id = :order_id
+            ORDER BY id ASC;
+        """)
+
+        with engine.connect() as conn:
+          items_res = conn.execute(
+              items_query, {"order_id": selected_order_id}
+          )
+          items_rows = items_res.fetchall()
+          items_df = (
+              pd.DataFrame(items_rows, columns=items_res.keys())
+              if items_rows
+              else pd.DataFrame()
+          )
+
+        if not items_df.empty:
+          st.dataframe(items_df, hide_index=True, use_container_width=True)
+          col_tot1, col_tot2 = st.columns([2, 1])
+          with col_tot2:
+            st.markdown(
+                f"<h3 style='text-align: right; color: #2E7D32;'>Total Bill:"
+                f" ₹{selected_order['total_inr']}</h3>",
+                unsafe_allow_html=True,
+            )
+        else:
+          items_list = str(selected_order["items_ordered"]).split(", ")
+          for dish in items_list:
+            st.markdown(f"- 🍽️ **{dish.strip()}**")
+          st.markdown(f"**Total Bill:** ₹{selected_order['total_inr']}")
+
+        # Status Update Control
+        st.markdown("#### ⚡ Update Ticket Status")
+        col_s1, col_s2 = st.columns([2, 1])
+        with col_s1:
+          status_options = [
+              "Confirmed",
+              "Preparing",
+              "Ready for Pickup / Out for Delivery",
+              "Delivered",
+          ]
+          current_status = (
+              selected_order["status"]
+              if selected_order["status"] in status_options
+              else "Confirmed"
+          )
+          new_status = st.selectbox(
+              "Current Status",
+              status_options,
+              index=status_options.index(current_status),
+              key=f"status_select_{selected_order_id}",
+          )
+
+        with col_s2:
+          st.write("")
+          st.write("")
+          if st.button("💾 Update Status", type="primary"):
+            update_sql = text("""
+                UPDATE orders 
+                SET status = :new_status 
+                WHERE order_id = :order_id;
+            """)
+            try:
+              with engine.begin() as db_conn:
+                db_conn.execute(
+                    update_sql,
+                    {
+                        "new_status": new_status,
+                        "order_id": selected_order_id,
+                    },
+                )
+              st.cache_data.clear()
+              st.success(
+                  f"Order #{selected_order_id} marked as '{new_status}'!"
+              )
+              st.rerun()
+            except Exception as e:
+              st.error(f"Failed to update status: {e}")
+
+        st.divider()
+
+        # All Orders Quick Table (Compact Overview)
+        with st.expander("📄 View All Order Headers for this Date"):
+          st.dataframe(
+              daily_orders[[
+                  "order_id",
+                  "delivery_type",
+                  "slot",
+                  "flat_no",
+                  "name",
+                  "phone",
+                  "total_inr",
+                  "status",
+              ]],
+              hide_index=True,
+              use_container_width=True,
+          )
+
       else:
-        st.write("No orders found for this date.")
+        st.info(
+            f"No orders registered for {filter_date} under the selected slot"
+            " filter."
+        )
 
     with admin_tab2:
       st.subheader("Manage Menu & Pricing")
