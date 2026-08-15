@@ -11,7 +11,7 @@ import streamlit as st
 # ====================================================
 BRAND_NAME = "TASTY India"
 BRAND_TAGLINE = "Tasty South grp"
-UPI_ID = "yourfriend@upi"  # Update with real UPI VPA
+UPI_ID = "yourfriend@upi"  # Replace with actual UPI ID (e.g. 9876543210@paytm)
 ADMIN_PIN = "5678"
 MIN_DELIVERY_AMOUNT = 150
 
@@ -71,12 +71,14 @@ def load_orders(target_date):
             o.utr_ref
         FROM orders o
         LEFT JOIN order_items oi ON o.order_id = oi.order_id
-        WHERE o.pickup_date = :target_date
+        WHERE o.pickup_date::DATE = :target_date::DATE
         GROUP BY o.order_id, o.delivery_type, o.created_at, o.pickup_date, o.order_type, o.slot, o.flat_no, o.name, o.phone, o.total_inr, o.utr_ref, o.status
         ORDER BY o.created_at DESC;
     """
   with engine.connect() as conn:
-    return pd.read_sql(text(query), conn, params={"target_date": target_date})
+    return pd.read_sql(
+        text(query), conn, params={"target_date": str(target_date)}
+    )
 
 
 @st.cache_data(ttl=5)
@@ -87,12 +89,14 @@ def load_kitchen_summary(target_date):
             SUM(oi.quantity) AS "Batch Quantity"
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.order_id
-        WHERE o.pickup_date = :target_date
+        WHERE o.pickup_date::DATE = :target_date::DATE
         GROUP BY oi.item_name
         ORDER BY "Batch Quantity" DESC;
     """
   with engine.connect() as conn:
-    return pd.read_sql(text(query), conn, params={"target_date": target_date})
+    return pd.read_sql(
+        text(query), conn, params={"target_date": str(target_date)}
+    )
 
 
 def create_upi_intent(
@@ -106,10 +110,12 @@ def create_upi_intent(
   return upi_url, buf.getvalue()
 
 
-# Sidebar Navigation & Access Control
+# ====================================================
+# SIDEBAR / VIEW SWITCHER
+# ====================================================
 with st.sidebar:
   try:
-    st.image("logo.png", width=130)
+    st.image("logo.png", width=140)
   except Exception:
     st.markdown("### 🍛 TASTY India")
 
@@ -144,7 +150,8 @@ if st.session_state.is_admin_mode:
 
     with admin_tab1:
       filter_date = st.date_input(
-          "Filter Orders By Date", value=date.today() + timedelta(days=1)
+          "Filter Orders By Date",
+          value=date.today(),  # Defaults to Today
       )
       daily_orders = load_orders(filter_date)
 
