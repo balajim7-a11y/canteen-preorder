@@ -11,7 +11,7 @@ import streamlit as st
 # ====================================================
 BRAND_NAME = "TASTY India"
 BRAND_TAGLINE = "Tasty South grp"
-UPI_ID = "yourfriend@upi"  # Replace with actual UPI ID (e.g. 9876543210@paytm)
+UPI_ID = "yourfriend@upi"  # Update with real UPI VPA
 ADMIN_PIN = "5678"
 MIN_DELIVERY_AMOUNT = 150
 
@@ -103,21 +103,139 @@ def create_upi_intent(
 
 
 # ====================================================
-# SIDEBAR / VIEW SWITCHER
+# URL PARAMETER ROUTING (?view=admin)
 # ====================================================
-with st.sidebar:
-  try:
-    st.image("logo.png", width=140)
-  except Exception:
-    st.markdown("### 🍛 TASTY India")
-  view_mode = st.radio(
-      "Navigation", ["🍽️ Place Order", "🔐 Kitchen & Admin Portal"]
-  )
+query_view = st.query_params.get("view", "order").lower()
 
 # ====================================================
-# VIEW 1: RESIDENT ORDERING
+# SEPARATE VIEW 1: ADMIN & KITCHEN PORTAL (?view=admin)
 # ====================================================
-if view_mode == "🍽️ Place Order":
+if query_view == "admin":
+  st.title(f"🔐 {BRAND_NAME} — Admin & Kitchen Portal")
+
+  admin_pin = st.text_input("Enter Admin PIN", type="password")
+
+  if admin_pin == ADMIN_PIN:
+    admin_tab1, admin_tab2 = st.tabs(
+        ["👨‍🍳 Kitchen Prep & Live Queue", "✏️ Menu Manager"]
+    )
+
+    with admin_tab1:
+      filter_date = st.date_input(
+          "Filter Orders By Date", value=date.today() + timedelta(days=1)
+      )
+      daily_orders = load_orders(filter_date)
+
+      m1, m2 = st.columns(2)
+      m1.metric(
+          "Total Orders", len(daily_orders) if not daily_orders.empty else 0
+      )
+      m2.metric(
+          "Total Revenue (₹)",
+          int(daily_orders["total_inr"].sum()) if not daily_orders.empty else 0,
+      )
+
+      st.markdown("---")
+      st.subheader(f"🥣 Batch Cooking Summary for {filter_date}")
+      summary_df = load_kitchen_summary(filter_date)
+      if not summary_df.empty:
+        st.dataframe(summary_df, hide_index=True, use_container_width=True)
+      else:
+        st.info("No items scheduled for this date.")
+
+      st.subheader("📋 Order Tickets")
+      if not daily_orders.empty:
+        st.dataframe(
+            daily_orders[[
+                "order_id",
+                "delivery_type",
+                "slot",
+                "flat_no",
+                "name",
+                "phone",
+                "items_ordered",
+                "total_inr",
+                "status",
+            ]],
+            hide_index=True,
+            use_container_width=True,
+        )
+      else:
+        st.write("No orders found for this date.")
+
+    with admin_tab2:
+      st.subheader("Manage Menu & Pricing")
+      current_menu = load_menu()
+      edited_menu = st.data_editor(
+          current_menu,
+          num_rows="dynamic",
+          use_container_width=True,
+          column_config={
+              "id": st.column_config.NumberColumn("ID", disabled=True),
+              "category": st.column_config.SelectboxColumn(
+                  "Category",
+                  options=[
+                      "Breakfast",
+                      "Lunch",
+                      "Snacks",
+                      "Dinner",
+                      "Beverages",
+                  ],
+                  required=True,
+              ),
+              "item_name": st.column_config.TextColumn(
+                  "Item Name", required=True
+              ),
+              "price": st.column_config.NumberColumn(
+                  "Price (₹)", min_value=1
+              ),
+              "daily_cap": st.column_config.NumberColumn(
+                  "Stock Limit", min_value=1
+              ),
+              "active": st.column_config.CheckboxColumn(
+                  "Active?", default=True
+              ),
+          },
+      )
+      if st.button("💾 Save Menu Changes", type="primary"):
+        try:
+          with engine.begin() as db_conn:
+            db_conn.execute(
+                text("TRUNCATE TABLE menu RESTART IDENTITY CASCADE;")
+            )
+            for _, row in edited_menu.iterrows():
+              if pd.notna(row["item_name"]) and str(row["item_name"]).strip():
+                insert_item = text(
+                    "INSERT INTO menu (category, item_name, price, daily_cap,"
+                    " active) VALUES (:category, :item_name, :price,"
+                    " :daily_cap, :active)"
+                )
+                db_conn.execute(
+                    insert_item,
+                    {
+                        "category": row["category"],
+                        "item_name": row["item_name"],
+                        "price": int(row["price"]),
+                        "daily_cap": (
+                            int(row["daily_cap"])
+                            if pd.notna(row["daily_cap"])
+                            else 50
+                        ),
+                        "active": bool(row["active"]),
+                    },
+                )
+          st.cache_data.clear()
+          st.success("Menu updated successfully!")
+          st.rerun()
+        except Exception as e:
+          st.error(f"Error saving menu: {e}")
+  elif admin_pin:
+    st.error("Incorrect PIN")
+
+# ====================================================
+# SEPARATE VIEW 2: RESIDENT ORDERING PORTAL (DEFAULT)
+# ====================================================
+else:
   col_logo, col_head = st.columns([1, 4])
   with col_logo:
     try:
@@ -319,124 +437,3 @@ if view_mode == "🍽️ Place Order":
           st.error(f"Error saving order: {ex}")
     elif total_bill > 0:
       st.warning("⚠️ Please fill in Flat No, Name, and Mobile Number.")
-
-# ====================================================
-# VIEW 2: KITCHEN & ADMIN
-# ====================================================
-else:
-  st.title(f"🔐 {BRAND_NAME} — Admin Portal")
-  admin_pin = st.text_input("Enter Admin PIN", type="password")
-
-  if admin_pin == ADMIN_PIN:
-    admin_tab1, admin_tab2 = st.tabs(
-        ["👨‍🍳 Kitchen Prep & Queue", "✏️ Menu Manager"]
-    )
-
-    with admin_tab1:
-      filter_date = st.date_input(
-          "Filter Date", value=date.today() + timedelta(days=1)
-      )
-      daily_orders = load_orders(filter_date)
-
-      m1, m2 = st.columns(2)
-      m1.metric("Orders", len(daily_orders) if not daily_orders.empty else 0)
-      m2.metric(
-          "Revenue (₹)",
-          int(daily_orders["total_inr"].sum()) if not daily_orders.empty else 0,
-      )
-
-      st.subheader("🥣 Batch Quantities")
-      summary_df = load_kitchen_summary(filter_date)
-      if not summary_df.empty:
-        st.dataframe(summary_df, hide_index=True, use_container_width=True)
-      else:
-        st.info("No items scheduled.")
-
-      st.subheader("📋 Order Tickets")
-      if not daily_orders.empty:
-        st.dataframe(
-            daily_orders[[
-                "order_id",
-                "delivery_type",
-                "slot",
-                "flat_no",
-                "name",
-                "phone",
-                "items_ordered",
-                "total_inr",
-                "status",
-            ]],
-            hide_index=True,
-            use_container_width=True,
-        )
-      else:
-        st.write("No orders found for this date.")
-
-    with admin_tab2:
-      st.subheader("Manage Menu")
-      current_menu = load_menu()
-      edited_menu = st.data_editor(
-          current_menu,
-          num_rows="dynamic",
-          use_container_width=True,
-          column_config={
-              "id": st.column_config.NumberColumn("ID", disabled=True),
-              "category": st.column_config.SelectboxColumn(
-                  "Category",
-                  options=[
-                      "Breakfast",
-                      "Lunch",
-                      "Snacks",
-                      "Dinner",
-                      "Beverages",
-                  ],
-                  required=True,
-              ),
-              "item_name": st.column_config.TextColumn(
-                  "Item Name", required=True
-              ),
-              "price": st.column_config.NumberColumn(
-                  "Price (₹)", min_value=1
-              ),
-              "daily_cap": st.column_config.NumberColumn(
-                  "Stock Limit", min_value=1
-              ),
-              "active": st.column_config.CheckboxColumn(
-                  "Active?", default=True
-              ),
-          },
-      )
-      if st.button("💾 Save Menu Changes", type="primary"):
-        try:
-          with engine.begin() as db_conn:
-            db_conn.execute(
-                text("TRUNCATE TABLE menu RESTART IDENTITY CASCADE;")
-            )
-            for _, row in edited_menu.iterrows():
-              if pd.notna(row["item_name"]) and str(row["item_name"]).strip():
-                insert_item = text(
-                    "INSERT INTO menu (category, item_name, price, daily_cap,"
-                    " active) VALUES (:category, :item_name, :price,"
-                    " :daily_cap, :active)"
-                )
-                db_conn.execute(
-                    insert_item,
-                    {
-                        "category": row["category"],
-                        "item_name": row["item_name"],
-                        "price": int(row["price"]),
-                        "daily_cap": (
-                            int(row["daily_cap"])
-                            if pd.notna(row["daily_cap"])
-                            else 50
-                        ),
-                        "active": bool(row["active"]),
-                    },
-                )
-          st.cache_data.clear()
-          st.success("Menu updated!")
-          st.rerun()
-        except Exception as e:
-          st.error(f"Error saving: {e}")
-  elif admin_pin:
-    st.error("Incorrect PIN")
