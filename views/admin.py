@@ -196,3 +196,8 @@ if admin_pin == ADMIN_PIN:
 
 elif admin_pin:
   st.error("Incorrect PIN. Access Denied.")
+
+# At the bottom/main section of views/admin.py:
+def render():
+    # Place all your admin PIN check and kitchen dashboards here
+    ...
