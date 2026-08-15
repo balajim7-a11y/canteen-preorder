@@ -11,7 +11,7 @@ import streamlit as st
 # ====================================================
 BRAND_NAME = "TASTY India"
 BRAND_TAGLINE = "Tasty South grp"
-UPI_ID = "yourfriend@upi"  # Replace with actual UPI ID (e.g. 9876543210@paytm)
+UPI_ID = "yourfriend@upi"  # Replace with actual UPI VPA (e.g. 9876543210@paytm)
 ADMIN_PIN = "5678"
 MIN_DELIVERY_AMOUNT = 150
 
@@ -49,41 +49,42 @@ engine = get_engine()
 def load_menu():
   with engine.connect() as conn:
     return pd.read_sql(
-        "SELECT id, category, item_name, price, daily_cap, active FROM menu"
-        " ORDER BY id ASC",
+        text(
+            "SELECT id, category, item_name, price, daily_cap, active FROM menu"
+            " ORDER BY id ASC"
+        ),
         conn,
     )
 
 
 @st.cache_data(ttl=5)
 def load_orders(target_date):
-  query = """
+  query = text("""
         SELECT 
             o.order_id,
-            o.delivery_type,
+            COALESCE(o.delivery_type, 'Counter Pickup') AS delivery_type,
             o.slot,
             o.flat_no,
             o.name,
             o.phone,
             o.total_inr,
             o.status,
-            STRING_AGG(oi.item_name || ' (x' || oi.quantity || ')', ', ') AS items_ordered,
+            COALESCE(STRING_AGG(oi.item_name || ' (x' || oi.quantity || ')', ', '), 'No items') AS items_ordered,
             o.utr_ref
         FROM orders o
         LEFT JOIN order_items oi ON o.order_id = oi.order_id
         WHERE o.pickup_date::DATE = :target_date::DATE
         GROUP BY o.order_id, o.delivery_type, o.created_at, o.pickup_date, o.order_type, o.slot, o.flat_no, o.name, o.phone, o.total_inr, o.utr_ref, o.status
         ORDER BY o.created_at DESC;
-    """
+    """).bindparams(target_date=str(target_date))
+
   with engine.connect() as conn:
-    return pd.read_sql(
-        text(query), conn, params={"target_date": str(target_date)}
-    )
+    return pd.read_sql(query, conn)
 
 
 @st.cache_data(ttl=5)
 def load_kitchen_summary(target_date):
-  query = """
+  query = text("""
         SELECT 
             oi.item_name AS "Menu Item",
             SUM(oi.quantity) AS "Batch Quantity"
@@ -92,11 +93,10 @@ def load_kitchen_summary(target_date):
         WHERE o.pickup_date::DATE = :target_date::DATE
         GROUP BY oi.item_name
         ORDER BY "Batch Quantity" DESC;
-    """
+    """).bindparams(target_date=str(target_date))
+
   with engine.connect() as conn:
-    return pd.read_sql(
-        text(query), conn, params={"target_date": str(target_date)}
-    )
+    return pd.read_sql(query, conn)
 
 
 def create_upi_intent(
@@ -151,7 +151,7 @@ if st.session_state.is_admin_mode:
     with admin_tab1:
       filter_date = st.date_input(
           "Filter Orders By Date",
-          value=date.today(),  # Defaults to Today
+          value=date.today(),
       )
       daily_orders = load_orders(filter_date)
 
