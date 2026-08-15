@@ -310,3 +310,7 @@ with col_pay2:
         "⚠️ Please fill in Tower/Flat No, Name, and Mobile Number to place your"
         " order."
     )
+# At the bottom/main section of views/order.py:
+def render():
+    # Place all your resident order layout, forms, and buttons here
+    ...
