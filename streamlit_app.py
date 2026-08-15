@@ -16,7 +16,7 @@ ADMIN_PIN = "5678"
 MIN_DELIVERY_AMOUNT = 150
 
 st.set_page_config(
-    page_title=f"{BRAND_NAME} - Clubhouse Canteen",
+    page_title=f"{BRAND_NAME} ",
     page_icon="🍛",
     layout="wide",
     initial_sidebar_state="collapsed",
