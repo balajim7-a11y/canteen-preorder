@@ -3,13 +3,13 @@ import urllib.parse
 from datetime import date, datetime, timedelta
 import pandas as pd
 import qrcode
+from sqlalchemy import create_engine, text
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 
 # ====================================================
 # CONFIGURATION
 # ====================================================
-UPI_ID = "yourfriend@upi"  # Update with your friend's real UPI ID
+UPI_ID = "yourfriend@upi"  # Replace with actual UPI ID (e.g. 9876543210@paytm)
 PAYEE_NAME = "Clubhouse Canteen"
 ADMIN_PIN = "5678"
 
@@ -17,19 +17,36 @@ st.set_page_config(
     page_title="Clubhouse Canteen", page_icon="🍲", layout="centered"
 )
 
-# Google Sheets Connection
-conn = st.connection("gsheets", type=GSheetsConnection)
+
+# --- Database Connection (Neon PostgreSQL) ---
+@st.cache_resource
+def get_engine():
+  db_url = st.secrets["postgres"]["url"]
+  return create_engine(db_url, pool_pre_ping=True)
 
 
+engine = get_engine()
+
+
+# Helper: Load Menu
 def load_menu():
-  # Set ttl=0 to always get live menu edits
-  return conn.read(worksheet="menu", ttl=0)
+  with engine.connect() as conn:
+    return pd.read_sql(
+        "SELECT id, category, item_name, price, daily_cap, active FROM menu"
+        " ORDER BY id ASC",
+        conn,
+    )
 
 
+# Helper: Load Orders
 def load_orders():
-  return conn.read(worksheet="orders", ttl=0)
+  with engine.connect() as conn:
+    return pd.read_sql(
+        "SELECT * FROM orders ORDER BY created_at DESC", conn
+    )
 
 
+# Helper: Generate UPI URL & QR Code
 def create_upi_intent(
     upi_id: str, payee_name: str, amount: float, order_id: str
 ):
@@ -51,7 +68,6 @@ tab_order, tab_kitchen = st.tabs(
 with tab_order:
   st.header("Clubhouse Canteen")
 
-  # Order Timing Selection
   order_type = st.radio(
       "When do you want your food?",
       ["Today (Order Now)", "Tomorrow (Pre-Order)"],
@@ -76,7 +92,9 @@ with tab_order:
         "Dinner: 7:30 PM - 8:30 PM",
     ]
 
-  st.caption(f"📅 Selected Pickup Date: **{selected_date.strftime('%A, %d %B %Y')}**")
+  st.caption(
+      f"📅 Selected Pickup Date: **{selected_date.strftime('%A, %d %B %Y')}**"
+  )
 
   with st.expander("Resident & Delivery Details", expanded=True):
     c1, c2 = st.columns(2)
@@ -88,18 +106,15 @@ with tab_order:
   st.subheader("Menu Items")
   try:
     menu_df = load_menu()
-    # Normalize column names in case of whitespace
-    menu_df.columns = [c.strip() for c in menu_df.columns]
     active_items = menu_df[menu_df["active"] == True]
   except Exception as e:
-    st.error(f"Unable to load menu: {e}")
+    st.error(f"Error connecting to database: {e}")
     active_items = pd.DataFrame()
 
   order_items = {}
   total_bill = 0
 
   if not active_items.empty:
-    # Group by category (Breakfast, Lunch, Snacks, etc.)
     categories = active_items["category"].unique()
     for cat in categories:
       st.markdown(f"#### {cat}")
@@ -111,11 +126,17 @@ with tab_order:
         c_price.write(f"₹{row['price']}")
         max_cap = int(row["daily_cap"]) if pd.notna(row["daily_cap"]) else 50
         qty = c_qty.number_input(
-            "Qty", min_value=0, max_value=max_cap, value=0, key=f"item_{row['id']}"
+            "Qty",
+            min_value=0,
+            max_value=max_cap,
+            value=0,
+            key=f"item_{row['id']}",
         )
         if qty > 0:
           order_items[row["item_name"]] = qty
           total_bill += qty * int(row["price"])
+  else:
+    st.info("No active menu items available at the moment.")
 
   st.divider()
   st.markdown(f"### Total Amount: **₹{total_bill}**")
@@ -144,10 +165,14 @@ with tab_order:
         "Confirm & Submit Order", type="primary", use_container_width=True
     ):
       items_str = ", ".join([f"{k} x{v}" for k, v in order_items.items()])
-      new_record = pd.DataFrame([{
+      insert_query = text("""
+                INSERT INTO orders (order_id, pickup_date, order_type, slot, flat_no, name, phone, items, total_inr, utr_ref, status)
+                VALUES (:order_id, :pickup_date, :order_type, :slot, :flat_no, :name, :phone, :items, :total_inr, :utr_ref, :status)
+            """)
+
+      params = {
           "order_id": order_id,
-          "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-          "pickup_date": str(selected_date),
+          "pickup_date": selected_date,
           "order_type": "Now" if "Today" in order_type else "Pre-Order",
           "slot": slot,
           "flat_no": flat_no,
@@ -157,20 +182,20 @@ with tab_order:
           "total_inr": total_bill,
           "utr_ref": utr_input if utr_input else "N/A",
           "status": "Confirmed",
-      }])
+      }
 
       try:
-        existing_orders = load_orders()
-        updated_orders = pd.concat(
-            [existing_orders, new_record], ignore_index=True
-        )
-        conn.update(worksheet="orders", data=updated_orders)
-        st.success(f"Order #{order_id} recorded successfully!")
+        with engine.begin() as db_conn:
+          db_conn.execute(insert_query, params)
+        st.success(f"Order #{order_id} placed successfully!")
         st.balloons()
       except Exception as ex:
         st.error(f"Error saving order: {ex}")
   elif total_bill > 0:
-    st.info("Please fill in Flat Number, Name, and Mobile Number to place your order.")
+    st.info(
+        "Please fill in Flat Number, Name, and Mobile Number to place your"
+        " order."
+    )
 
 # ====================================================
 # TAB 2: KITCHEN DASHBOARD & IN-APP MENU EDITOR
@@ -188,14 +213,14 @@ with tab_kitchen:
     with kitchen_tab1:
       try:
         orders_df = load_orders()
-        if orders_df.empty or "items" not in orders_df.columns:
+        if orders_df.empty:
           st.info("No orders recorded yet.")
         else:
           filter_date = st.date_input(
               "Filter Orders By Date", value=date.today()
           )
           daily_orders = orders_df[
-              orders_df["pickup_date"] == str(filter_date)
+              orders_df["pickup_date"].astype(str) == str(filter_date)
           ]
 
           st.subheader(f"Quantities to Prepare for {filter_date}")
@@ -218,42 +243,78 @@ with tab_kitchen:
           st.subheader("Order Details")
           st.dataframe(daily_orders, use_container_width=True)
       except Exception as e:
-        st.error(f"Error loading orders: {e}")
+        st.error(f"Error reading orders: {e}")
 
     # SUB-TAB B: IN-APP MENU EDITOR
     with kitchen_tab2:
       st.subheader("Manage Menu Items & Prices")
       st.caption(
-          "Edit values in the table below, toggle availability, or add new rows at the bottom."
+          "Edit items directly below, add new rows at the bottom, or toggle"
+          " availability."
       )
 
       current_menu = load_menu()
 
-      # Interactive editable table
       edited_menu = st.data_editor(
           current_menu,
-          num_rows="dynamic",  # Allows adding/deleting rows
+          num_rows="dynamic",
           use_container_width=True,
           column_config={
-              "id": st.column_config.NumberColumn("ID", disabled=False),
+              "id": st.column_config.NumberColumn("ID", disabled=True),
               "category": st.column_config.SelectboxColumn(
                   "Category",
-                  options=["Breakfast", "Lunch", "Snacks", "Dinner", "Beverages"],
+                  options=[
+                      "Breakfast",
+                      "Lunch",
+                      "Snacks",
+                      "Dinner",
+                      "Beverages",
+                  ],
                   required=True,
               ),
-              "item_name": st.column_config.TextColumn("Item Name", required=True),
-              "price": st.column_config.NumberColumn("Price (₹)", min_value=1, format="₹%d"),
-              "daily_cap": st.column_config.NumberColumn("Stock Limit", min_value=1),
-              "active": st.column_config.CheckboxColumn("Available Today/Tomorrow?", default=True),
+              "item_name": st.column_config.TextColumn(
+                  "Item Name", required=True
+              ),
+              "price": st.column_config.NumberColumn(
+                  "Price (₹)", min_value=1, format="₹%d"
+              ),
+              "daily_cap": st.column_config.NumberColumn(
+                  "Stock Limit", min_value=1
+              ),
+              "active": st.column_config.CheckboxColumn(
+                  "Available?", default=True
+              ),
           },
       )
 
-      if st.button("💾 Save Menu Changes to Google Sheets", type="primary"):
+      if st.button("💾 Save Menu Changes to Neon DB", type="primary"):
         try:
-          conn.update(worksheet="menu", data=edited_menu)
-          st.success("Menu updated successfully! Changes are live immediately.")
+          with engine.begin() as db_conn:
+            db_conn.execute(text("TRUNCATE TABLE menu RESTART IDENTITY;"))
+            for _, row in edited_menu.iterrows():
+              if pd.notna(row["item_name"]) and str(row["item_name"]).strip():
+                insert_item = text("""
+                                    INSERT INTO menu (category, item_name, price, daily_cap, active)
+                                    VALUES (:category, :item_name, :price, :daily_cap, :active)
+                                """)
+                db_conn.execute(
+                    insert_item,
+                    {
+                        "category": row["category"],
+                        "item_name": row["item_name"],
+                        "price": int(row["price"]),
+                        "daily_cap": (
+                            int(row["daily_cap"])
+                            if pd.notna(row["daily_cap"])
+                            else 50
+                        ),
+                        "active": bool(row["active"]),
+                    },
+                )
+          st.success("Menu updated in Neon DB successfully!")
+          st.rerun()
         except Exception as e:
-          st.error(f"Failed to update menu: {e}")
+          st.error(f"Error updating menu: {e}")
 
   elif admin_pin:
     st.error("Incorrect PIN")
