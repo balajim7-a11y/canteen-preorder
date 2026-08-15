@@ -6,22 +6,35 @@ import qrcode
 from sqlalchemy import create_engine, text
 import streamlit as st
 
-# Configuration
+# ====================================================
+# CONFIGURATION
+# ====================================================
 BRAND_NAME = "TASTY India"
 BRAND_TAGLINE = "Tasty South grp"
-UPI_ID = "yourfriend@upi"  # Update with your friend's real UPI ID
+UPI_ID = "yourfriend@upi"  # Replace with actual UPI VPA (e.g. 9876543210@paytm)
+MIN_DELIVERY_AMOUNT = 150
 
 
-# Database Connection
+# ====================================================
+# DATABASE & CACHING
+# ====================================================
 @st.cache_resource
 def get_engine():
   db_url = st.secrets["postgres"]["url"]
-  return create_engine(db_url, pool_pre_ping=True)
+  return create_engine(
+      db_url,
+      pool_size=5,
+      max_overflow=10,
+      pool_recycle=1800,
+      pool_pre_ping=True,
+  )
 
 
 engine = get_engine()
 
 
+# Cached menu loader (60-second TTL for low latency)
+@st.cache_data(ttl=60)
 def load_menu():
   with engine.connect() as conn:
     return pd.read_sql(
@@ -31,6 +44,7 @@ def load_menu():
     )
 
 
+# Helper: Generate UPI Intent Link and QR Code
 def create_upi_intent(
     upi_id: str, payee_name: str, amount: float, order_id: str
 ):
@@ -42,18 +56,22 @@ def create_upi_intent(
   return upi_url, buf.getvalue()
 
 
-# Header & Branding
+# ====================================================
+# BRAND HEADER
+# ====================================================
 col_logo, col_head = st.columns([1, 4])
 with col_logo:
   try:
-    st.image("logo.png", width=120)
+    st.image("logo.png", width=110)
   except Exception:
     st.write("🍛")
 with col_head:
   st.title(f"{BRAND_NAME}")
   st.caption(f"✨ *{BRAND_TAGLINE}* | Clubhouse Cafeteria")
 
-# Timeline Selection
+# ====================================================
+# TIMELINE SELECTION
+# ====================================================
 col_t1, col_t2 = st.columns([1, 1])
 with col_t1:
   order_type = st.segmented_control(
@@ -82,18 +100,14 @@ else:
 
 with col_t2:
   st.markdown(
-      f"📅 **Pickup Date:** `{selected_date.strftime('%A, %d %B %Y')}`"
+      f"📅 **Selected Date:** `{selected_date.strftime('%A, %d %B %Y')}`"
   )
 
 st.markdown("---")
 
-with st.expander("📍 Resident Pickup & Contact Details", expanded=True):
-  col_u1, col_u2, col_u3 = st.columns([1, 1, 1])
-  flat_no = col_u1.text_input("Flat / Door No.*", placeholder="e.g. B-603")
-  resident_name = col_u2.text_input("Your Name*", placeholder="Balaji M")
-  phone = col_u3.text_input("Mobile No.*", placeholder="9876543210")
-  slot = st.selectbox("Select Pickup Slot*", slots)
-
+# ====================================================
+# MENU SELECTION
+# ====================================================
 st.subheader("📋 Select Dishes")
 
 try:
@@ -142,6 +156,52 @@ if not active_items.empty:
           total_bill += subtotal
         st.divider()
 
+# ====================================================
+# DELIVERY LOGIC (>= 150 ELIGIBILITY)
+# ====================================================
+if total_bill >= MIN_DELIVERY_AMOUNT:
+  st.success(
+      "🛵 **Eligible for FREE Doorstep Delivery!** (Order is ₹150 or more)"
+  )
+elif total_bill > 0:
+  diff = MIN_DELIVERY_AMOUNT - total_bill
+  st.info(
+      f"💡 Add **₹{diff}** more to unlock **Free Doorstep Delivery** (Current"
+      f" total: ₹{total_bill})"
+  )
+
+# ====================================================
+# RESIDENT DETAILS & ADDRESS FORM
+# ====================================================
+with st.expander("📍 Delivery / Pickup & Contact Details", expanded=True):
+  col_u1, col_u2, col_u3 = st.columns([1, 1, 1])
+  flat_no = col_u1.text_input(
+      "Tower & Flat / Door No.*", placeholder="e.g. Tower 2, Flat 603"
+  )
+  resident_name = col_u2.text_input("Your Name*", placeholder="Name")
+  phone = col_u3.text_input("Mobile No.*", placeholder="9876543210")
+
+  col_d1, col_d2 = st.columns([1, 1])
+  with col_d1:
+    if total_bill >= MIN_DELIVERY_AMOUNT:
+      delivery_choice = st.radio(
+          "Service Mode*",
+          ["🛵 Doorstep Delivery (Free)", "🏢 Clubhouse Counter Pickup"],
+          horizontal=True,
+      )
+    else:
+      delivery_choice = "🏢 Clubhouse Counter Pickup"
+      st.caption(
+          "Service Mode: **Clubhouse Counter Pickup** *(Min ₹150 for doorstep"
+          " delivery)*"
+      )
+
+  with col_d2:
+    slot = st.selectbox("Preferred Time Slot*", slots)
+
+# ====================================================
+# CHECKOUT & TRANSACTIONAL SUBMIT
+# ====================================================
 st.markdown("### 🛒 Order Summary")
 col_pay1, col_pay2 = st.columns([1, 1])
 
@@ -183,19 +243,28 @@ with col_pay2:
     if st.button(
         "✅ Confirm & Submit Order", type="primary", use_container_width=True
     ):
+      # SQL Statements for Atomic Transaction
       insert_order_query = text("""
-          INSERT INTO orders (order_id, pickup_date, order_type, slot, flat_no, name, phone, total_inr, utr_ref, status)
-          VALUES (:order_id, :pickup_date, :order_type, :slot, :flat_no, :name, :phone, :total_inr, :utr_ref, :status)
-      """)
+                INSERT INTO orders (order_id, pickup_date, order_type, delivery_type, slot, flat_no, name, phone, total_inr, utr_ref, status)
+                VALUES (:order_id, :pickup_date, :order_type, :delivery_type, :slot, :flat_no, :name, :phone, :total_inr, :utr_ref, :status)
+            """)
+
       insert_item_query = text("""
-          INSERT INTO order_items (order_id, item_id, item_name, quantity, unit_price, subtotal)
-          VALUES (:order_id, :item_id, :item_name, :quantity, :unit_price, :subtotal)
-      """)
+                INSERT INTO order_items (order_id, item_id, item_name, quantity, unit_price, subtotal)
+                VALUES (:order_id, :item_id, :item_name, :quantity, :unit_price, :subtotal)
+            """)
+
+      clean_delivery_type = (
+          "Doorstep Delivery"
+          if "Doorstep" in delivery_choice
+          else "Counter Pickup"
+      )
 
       order_params = {
           "order_id": order_id,
           "pickup_date": selected_date,
           "order_type": "Now" if "Today" in str(order_type) else "Pre-Order",
+          "delivery_type": clean_delivery_type,
           "slot": slot,
           "flat_no": flat_no,
           "name": resident_name,
@@ -205,17 +274,39 @@ with col_pay2:
           "status": "Confirmed",
       }
 
+      # Atomic Transaction Execution
       try:
         with engine.begin() as db_conn:
+          # 1. Insert Order Header
           db_conn.execute(insert_order_query, order_params)
+
+          # 2. Insert Line Items referencing the order_id
           for item in order_items:
-            item["order_id"] = order_id
-            db_conn.execute(insert_item_query, item)
-        st.success(
-            f"🎉 Order #{order_id} placed successfully! Collect at {slot}."
-        )
+            item_record = {
+                "order_id": order_id,
+                "item_id": item["item_id"],
+                "item_name": item["item_name"],
+                "quantity": item["quantity"],
+                "unit_price": item["unit_price"],
+                "subtotal": item["subtotal"],
+            }
+            db_conn.execute(insert_item_query, item_record)
+
+        if "Doorstep" in clean_delivery_type:
+          st.success(
+              f"🎉 Order #{order_id} placed! It will be delivered to"
+              f" {flat_no} around {slot}."
+          )
+        else:
+          st.success(
+              f"🎉 Order #{order_id} placed! Please collect at the clubhouse"
+              f" counter at {slot}."
+          )
         st.balloons()
       except Exception as ex:
-        st.error(f"Error recording order: {ex}")
+        st.error(f"Database write error: {ex}")
   elif total_bill > 0:
-    st.warning("⚠️ Please fill in Flat No, Name, and Mobile Number to proceed.")
+    st.warning(
+        "⚠️ Please fill in Tower/Flat No, Name, and Mobile Number to place your"
+        " order."
+    )
