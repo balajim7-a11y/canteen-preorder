@@ -151,12 +151,12 @@ with st.sidebar:
       st.rerun()
 
 # ====================================================
-# VIEW 1: KITCHEN & ADMIN DASHBOARD
+# VIEW 1: KITCHEN & ADMIN POS DISPLAY BOARD
 # ====================================================
 if st.session_state.is_admin_mode:
   col_title, col_btn = st.columns([4, 1])
   with col_title:
-    st.title(f"🔐 {BRAND_NAME} — Admin & Kitchen Portal")
+    st.title(f"🔐 {BRAND_NAME} — Kitchen & Admin Portal")
   with col_btn:
     if st.button("Back to Order Page"):
       st.session_state.is_admin_mode = False
@@ -166,19 +166,17 @@ if st.session_state.is_admin_mode:
 
   if admin_pin == ADMIN_PIN:
     admin_tab1, admin_tab2 = st.tabs(
-        ["👨‍🍳 Kitchen Prep & Live Queue", "✏️ Menu Manager"]
+        ["👨‍🍳 Live Kitchen Display (KDS)", "✏️ Menu Manager"]
     )
 
     with admin_tab1:
-      col_f1, col_f2 = st.columns([1, 1])
+      # Top Action Bar & Filters
+      col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
       with col_f1:
-        filter_date = st.date_input(
-            "📅 Filter Orders By Date",
-            value=date.today(),
-        )
+        filter_date = st.date_input("📅 Date", value=date.today())
       with col_f2:
         slot_filter = st.selectbox(
-            "⏰ Filter by Time Slot",
+            "⏰ Meal / Slot Filter",
             [
                 "All Slots",
                 "Breakfast",
@@ -188,6 +186,12 @@ if st.session_state.is_admin_mode:
                 "Immediate / ASAP",
             ],
         )
+      with col_f3:
+        st.write("")
+        st.write("")
+        if st.button("🔄 Refresh Data"):
+          st.cache_data.clear()
+          st.rerun()
 
       daily_orders = load_orders(filter_date)
 
@@ -198,16 +202,15 @@ if st.session_state.is_admin_mode:
             )
         ]
 
-      # Metrics summary
-      m1, m2, m3 = st.columns(3)
-      m1.metric(
-          "Total Orders", len(daily_orders) if not daily_orders.empty else 0
+      # Quick Metrics
+      m1, m2, m3, m4 = st.columns(4)
+      total_ct = len(daily_orders) if not daily_orders.empty else 0
+      rev_val = (
+          int(daily_orders["total_inr"].sum())
+          if not daily_orders.empty
+          else 0
       )
-      m2.metric(
-          "Total Revenue",
-          f"₹{int(daily_orders['total_inr'].sum()) if not daily_orders.empty else 0}",
-      )
-      delivery_count = (
+      delivery_ct = (
           len(
               daily_orders[
                   daily_orders["delivery_type"] == "Doorstep Delivery"
@@ -216,181 +219,186 @@ if st.session_state.is_admin_mode:
           if not daily_orders.empty
           else 0
       )
-      m3.metric("Doorstep Deliveries 🛵", delivery_count)
+      pickup_ct = total_ct - delivery_ct
 
-      st.divider()
+      m1.metric("Total Orders", total_ct)
+      m2.metric("Revenue", f"₹{rev_val}")
+      m3.metric("🛵 Deliveries", delivery_ct)
+      m4.metric("🏢 Pickups", pickup_ct)
 
-      # Section 1: Kitchen Batch Summary
+      st.markdown("---")
+
+      # Cook's Batch Preparation Summary
       with st.expander(
-          "🥣 **Batch Cooking Requirements (Total Counts)**", expanded=False
+          "🥣 **Cook's Bulk Prep Count (Total Quantity to Prepare)**",
+          expanded=False,
       ):
         summary_df = load_kitchen_summary(filter_date)
         if not summary_df.empty:
           st.dataframe(summary_df, hide_index=True, use_container_width=True)
         else:
-          st.info("No items scheduled for cooking on this date.")
+          st.info("No batch cooking scheduled for this date.")
 
-      st.markdown("### 📋 Order Details & Ticket Inspector")
+      st.subheader("🔥 Live Kitchen Display Board")
 
-      if not daily_orders.empty:
-        # Create user-friendly label for dropdown selector
-        order_options = {}
-        for _, o_row in daily_orders.iterrows():
-          badge = (
-              "🛵 Doorstep"
-              if "Doorstep" in str(o_row["delivery_type"])
-              else "🏢 Pickup"
-          )
-          label = (
-              f"#{o_row['order_id']} | Flat: {o_row['flat_no']} |"
-              f" {o_row['slot']} | {badge} | ₹{o_row['total_inr']}"
-          )
-          order_options[label] = o_row["order_id"]
-
-        selected_label = st.selectbox(
-            "👉 Select an Order to View Details:", list(order_options.keys())
+      if daily_orders.empty:
+        st.info(
+            f"No orders registered for {filter_date.strftime('%d %b %Y')} under"
+            " the selected slot."
         )
-        selected_order_id = order_options[selected_label]
-
-        # Fetch selected order data
-        selected_order = daily_orders[
-            daily_orders["order_id"] == selected_order_id
-        ].iloc[0]
-        is_delivery = "Doorstep" in str(selected_order["delivery_type"])
-
-        # Top Information Banner
-        st.markdown(
-            f"""
-            <div style="background-color: {'#FFF3E0' if is_delivery else '#E3F2FD'}; 
-                        padding: 16px; border-radius: 8px; margin: 12px 0; border: 1px solid {'#FFE0B2' if is_delivery else '#BBDEFB'};">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <span style="font-size: 1.4rem; font-weight: 800; color: #111;">Order #{selected_order['order_id']}</span>
-                    <span style="background: {'#D32F2F' if is_delivery else '#1565C0'}; color: #FFFFFF; font-weight: 700; padding: 4px 12px; border-radius: 20px; font-size: 0.9rem;">
-                        {'🛵 DOORSTEP DELIVERY' if is_delivery else '🏢 COUNTER PICKUP'}
-                    </span>
-                </div>
-                <div style="font-size: 1.05rem; color: #333; line-height: 1.6;">
-                    📍 <b>Flat / Door No:</b> <span style="font-size: 1.25rem; font-weight: 800; color: #D32F2F;">{selected_order['flat_no']}</span><br>
-                    ⏰ <b>Preferred Slot:</b> <span style="font-weight: 700;">{selected_order['slot']}</span><br>
-                    👤 <b>Resident:</b> {selected_order['name']} &nbsp;|&nbsp; 📞 <a href="tel:{selected_order['phone']}"><b>{selected_order['phone']}</b></a><br>
-                    💳 <b>Payment UTR / Ref:</b> <code>{selected_order['utr_ref']}</code>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # Line-by-line item breakdown from order_items table
-        st.markdown("#### 🍴 Ordered Items Breakdown")
-        items_query = text("""
-            SELECT 
-                item_name AS "Dish / Item",
-                quantity AS "Qty",
-                unit_price AS "Price (₹)",
-                subtotal AS "Subtotal (₹)"
+      else:
+        # Fetch line items for the active orders in a single database call
+        order_ids_list = daily_orders["order_id"].tolist()
+        items_batch_query = text("""
+            SELECT order_id, item_name, quantity, unit_price 
             FROM order_items
-            WHERE order_id = :order_id
-            ORDER BY id ASC;
+            WHERE order_id = ANY(:order_ids)
         """)
 
         with engine.connect() as conn:
-          items_res = conn.execute(
-              items_query, {"order_id": selected_order_id}
-          )
-          items_rows = items_res.fetchall()
+          raw_items = conn.execute(
+              items_batch_query, {"order_ids": order_ids_list}
+          ).fetchall()
           items_df = (
-              pd.DataFrame(items_rows, columns=items_res.keys())
-              if items_rows
+              pd.DataFrame(
+                  raw_items,
+                  columns=[
+                      "order_id",
+                      "item_name",
+                      "quantity",
+                      "unit_price",
+                  ],
+              )
+              if raw_items
               else pd.DataFrame()
           )
 
-        if not items_df.empty:
-          st.dataframe(items_df, hide_index=True, use_container_width=True)
-          col_tot1, col_tot2 = st.columns([2, 1])
-          with col_tot2:
-            st.markdown(
-                f"<h3 style='text-align: right; color: #2E7D32;'>Total Bill:"
-                f" ₹{selected_order['total_inr']}</h3>",
-                unsafe_allow_html=True,
-            )
-        else:
-          items_list = str(selected_order["items_ordered"]).split(", ")
-          for dish in items_list:
-            st.markdown(f"- 🍽️ **{dish.strip()}**")
-          st.markdown(f"**Total Bill:** ₹{selected_order['total_inr']}")
+        # 2-Column POS Card Layout
+        cols = st.columns(2)
+        for i, (_, order) in enumerate(daily_orders.iterrows()):
+          col_target = cols[i % 2]
 
-        # Status Update Control
-        st.markdown("#### ⚡ Update Ticket Status")
-        col_s1, col_s2 = st.columns([2, 1])
-        with col_s1:
-          status_options = [
-              "Confirmed",
-              "Preparing",
-              "Ready for Pickup / Out for Delivery",
-              "Delivered",
-          ]
-          current_status = (
-              selected_order["status"]
-              if selected_order["status"] in status_options
-              else "Confirmed"
-          )
-          new_status = st.selectbox(
-              "Current Status",
-              status_options,
-              index=status_options.index(current_status),
-              key=f"status_select_{selected_order_id}",
-          )
+          is_delivery = "Doorstep" in str(order["delivery_type"])
+          is_done = order["status"] in ["Delivered", "Completed"]
 
-        with col_s2:
-          st.write("")
-          st.write("")
-          if st.button("💾 Update Status", type="primary"):
-            update_sql = text("""
-                UPDATE orders 
-                SET status = :new_status 
-                WHERE order_id = :order_id;
-            """)
-            try:
-              with engine.begin() as db_conn:
-                db_conn.execute(
-                    update_sql,
-                    {
-                        "new_status": new_status,
-                        "order_id": selected_order_id,
-                    },
-                )
-              st.cache_data.clear()
-              st.success(
-                  f"Order #{selected_order_id} marked as '{new_status}'!"
+          border_color = (
+              "#4CAF50"
+              if is_done
+              else ("#FF5722" if is_delivery else "#2196F3")
+          )
+          badge_bg = (
+              "#E8F5E9"
+              if is_done
+              else ("#FBE9E7" if is_delivery else "#E3F2FD")
+          )
+          badge_text_color = (
+              "#2E7D32"
+              if is_done
+              else ("#D84315" if is_delivery else "#1565C0")
+          )
+          mode_label = (
+              "✅ COMPLETED"
+              if is_done
+              else (
+                  "🛵 DOORSTEP DELIVERY"
+                  if is_delivery
+                  else "🏢 COUNTER PICKUP"
               )
-              st.rerun()
-            except Exception as e:
-              st.error(f"Failed to update status: {e}")
-
-        st.divider()
-
-        # All Orders Quick Table (Compact Overview)
-        with st.expander("📄 View All Order Headers for this Date"):
-          st.dataframe(
-              daily_orders[[
-                  "order_id",
-                  "delivery_type",
-                  "slot",
-                  "flat_no",
-                  "name",
-                  "phone",
-                  "total_inr",
-                  "status",
-              ]],
-              hide_index=True,
-              use_container_width=True,
           )
 
-      else:
-        st.info(
-            f"No orders registered for {filter_date} under the selected slot"
-            " filter."
-        )
+          with col_target:
+            with st.container():
+              # Card Header
+              st.markdown(
+                  f"""
+                  <div style="background-color: #FFFFFF; border: 2px solid {border_color}; border-radius: 10px; padding: 14px; margin-bottom: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #F0F2F6; padding-bottom: 6px; margin-bottom: 8px;">
+                          <span style="font-size: 1.35rem; font-weight: 900; color: #111;">#{order['order_id']}</span>
+                          <span style="background: {badge_bg}; color: {badge_text_color}; font-weight: 800; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem;">{mode_label}</span>
+                          <span style="font-size: 1.25rem; font-weight: 900; color: #2E7D32;">₹{order['total_inr']}</span>
+                      </div>
+                      <div style="margin-bottom: 10px;">
+                          <div style="font-size: 1.3rem; font-weight: 900; color: #D32F2F;">📍 Flat: {order['flat_no']}</div>
+                          <div style="font-size: 1rem; font-weight: 700; color: #333;">⏰ Slot: {order['slot']}</div>
+                          <div style="font-size: 0.95rem; color: #555;">👤 {order['name']} | <a href="tel:{order['phone']}" style="color: #1976D2; font-weight: bold; text-decoration: none;">📞 {order['phone']}</a></div>
+                      </div>
+                  </div>
+                  """,
+                  unsafe_allow_html=True,
+              )
+
+              # Dish Packing List
+              st.markdown("**Dishes to Pack:**")
+              order_dishes = (
+                  items_df[items_df["order_id"] == order["order_id"]]
+                  if not items_df.empty
+                  else pd.DataFrame()
+              )
+
+              if not order_dishes.empty:
+                for _, dish in order_dishes.iterrows():
+                  st.markdown(
+                      "▫️ <span style='font-size: 1.1rem; font-weight:"
+                      f" 700;'>{dish['quantity']}x"
+                      f" {dish['item_name']}</span>",
+                      unsafe_allow_html=True,
+                  )
+              else:
+                for fallback_dish in str(order["items_ordered"]).split(", "):
+                  st.markdown(
+                      "▫️ <span style='font-size: 1.1rem; font-weight:"
+                      f" 700;'>{fallback_dish}</span>",
+                      unsafe_allow_html=True,
+                  )
+
+              # Quick Status Buttons
+              st.write("")
+              current_st = order["status"]
+              btn_col1, btn_col2 = st.columns([2, 1])
+
+              with btn_col1:
+                st.caption(
+                    f"Status: **{current_st}** | UTR: `{order['utr_ref']}`"
+                )
+
+              with btn_col2:
+                if current_st in ["Confirmed", "Preparing"]:
+                  if st.button(
+                      "Mark Ready 🚀",
+                      key=f"btn_rdy_{order['order_id']}",
+                      use_container_width=True,
+                  ):
+                    with engine.begin() as db_conn:
+                      db_conn.execute(
+                          text(
+                              "UPDATE orders SET status = 'Ready / Out for"
+                              " Delivery' WHERE order_id = :oid"
+                          ),
+                          {"oid": order["order_id"]},
+                      )
+                    st.cache_data.clear()
+                    st.rerun()
+                elif current_st == "Ready / Out for Delivery":
+                  if st.button(
+                      "Complete ✅",
+                      key=f"btn_done_{order['order_id']}",
+                      use_container_width=True,
+                      type="primary",
+                  ):
+                    with engine.begin() as db_conn:
+                      db_conn.execute(
+                          text(
+                              "UPDATE orders SET status = 'Completed' WHERE"
+                              " order_id = :oid"
+                          ),
+                          {"oid": order["order_id"]},
+                      )
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                  st.caption("Order Finished")
+
+              st.divider()
 
     with admin_tab2:
       st.subheader("Manage Menu & Pricing")
