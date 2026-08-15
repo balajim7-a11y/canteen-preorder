@@ -11,7 +11,7 @@ import streamlit as st
 # ====================================================
 BRAND_NAME = "TASTY India"
 BRAND_TAGLINE = "Tasty South grp"
-UPI_ID = "yourfriend@upi"  # Replace with actual UPI VPA (e.g. 9876543210@paytm)
+UPI_ID = "yourfriend@upi"  # Replace with actual UPI VPA
 ADMIN_PIN = "5678"
 MIN_DELIVERY_AMOUNT = 150
 
@@ -22,7 +22,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Manage state for admin view
 if "is_admin_mode" not in st.session_state:
   st.session_state.is_admin_mode = False
 
@@ -48,12 +47,15 @@ engine = get_engine()
 @st.cache_data(ttl=60)
 def load_menu():
   with engine.connect() as conn:
-    return pd.read_sql(
+    result = conn.execute(
         text(
             "SELECT id, category, item_name, price, daily_cap, active FROM menu"
             " ORDER BY id ASC"
-        ),
-        conn,
+        )
+    )
+    rows = result.fetchall()
+    return (
+        pd.DataFrame(rows, columns=result.keys()) if rows else pd.DataFrame()
     )
 
 
@@ -73,13 +75,29 @@ def load_orders(target_date):
             o.utr_ref
         FROM orders o
         LEFT JOIN order_items oi ON o.order_id = oi.order_id
-        WHERE o.pickup_date::DATE = :target_date::DATE
+        WHERE CAST(o.pickup_date AS DATE) = CAST(:target_date AS DATE)
         GROUP BY o.order_id, o.delivery_type, o.created_at, o.pickup_date, o.order_type, o.slot, o.flat_no, o.name, o.phone, o.total_inr, o.utr_ref, o.status
         ORDER BY o.created_at DESC;
     """)
   with engine.connect() as conn:
     result = conn.execute(query, {"target_date": str(target_date)})
-    return pd.DataFrame(result.fetchall(), columns=result.keys())
+    rows = result.fetchall()
+    if rows:
+      return pd.DataFrame(rows, columns=result.keys())
+    return pd.DataFrame(
+        columns=[
+            "order_id",
+            "delivery_type",
+            "slot",
+            "flat_no",
+            "name",
+            "phone",
+            "total_inr",
+            "status",
+            "items_ordered",
+            "utr_ref",
+        ]
+    )
 
 
 @st.cache_data(ttl=5)
@@ -90,13 +108,16 @@ def load_kitchen_summary(target_date):
             SUM(oi.quantity) AS "Batch Quantity"
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.order_id
-        WHERE o.pickup_date::DATE = :target_date::DATE
+        WHERE CAST(o.pickup_date AS DATE) = CAST(:target_date AS DATE)
         GROUP BY oi.item_name
         ORDER BY "Batch Quantity" DESC;
     """)
   with engine.connect() as conn:
     result = conn.execute(query, {"target_date": str(target_date)})
-    return pd.DataFrame(result.fetchall(), columns=result.keys())
+    rows = result.fetchall()
+    if rows:
+      return pd.DataFrame(rows, columns=result.keys())
+    return pd.DataFrame(columns=["Menu Item", "Batch Quantity"])
 
 
 def create_upi_intent(
@@ -149,10 +170,7 @@ if st.session_state.is_admin_mode:
     )
 
     with admin_tab1:
-      filter_date = st.date_input(
-          "Filter Orders By Date",
-          value=date.today(),
-      )
+      filter_date = st.date_input("Filter Orders By Date", value=date.today())
       daily_orders = load_orders(filter_date)
 
       m1, m2 = st.columns(2)
@@ -234,11 +252,10 @@ if st.session_state.is_admin_mode:
             )
             for _, row in edited_menu.iterrows():
               if pd.notna(row["item_name"]) and str(row["item_name"]).strip():
-                insert_item = text(
-                    "INSERT INTO menu (category, item_name, price, daily_cap,"
-                    " active) VALUES (:category, :item_name, :price,"
-                    " :daily_cap, :active)"
-                )
+                insert_item = text("""
+                                    INSERT INTO menu (category, item_name, price, daily_cap, active)
+                                    VALUES (:category, :item_name, :price, :daily_cap, :active)
+                                """)
                 db_conn.execute(
                     insert_item,
                     {
@@ -307,7 +324,11 @@ else:
   st.subheader("📋 Select Dishes")
   try:
     menu_df = load_menu()
-    active_items = menu_df[menu_df["active"] == True]
+    active_items = (
+        menu_df[menu_df["active"] == True]
+        if not menu_df.empty
+        else pd.DataFrame()
+    )
   except Exception as e:
     st.error(f"Unable to load menu: {e}")
     active_items = pd.DataFrame()
@@ -467,7 +488,7 @@ else:
     elif total_bill > 0:
       st.warning("⚠️ Please fill in Flat No, Name, and Mobile Number.")
 
-  # Discrete staff entry at bottom
+  # Discrete staff entry button
   st.write("---")
   col_foot, col_staff = st.columns([4, 1])
   with col_staff:
