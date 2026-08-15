@@ -7,37 +7,34 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 # ====================================================
-# 1. CONFIGURATION (Update with your friend's details)
+# CONFIGURATION
 # ====================================================
-UPI_ID = "yourfriend@upi"  # e.g., 9876543210@paytm, user@okaxis
-PAYEE_NAME = "Clubhouse Canteen"  # Business / Account holder name
-ADMIN_PIN = "5678"  # PIN for kitchen dashboard access
+UPI_ID = "yourfriend@upi"  # Update with your friend's real UPI ID
+PAYEE_NAME = "Clubhouse Canteen"
+ADMIN_PIN = "5678"
 
 st.set_page_config(
-    page_title="Clubhouse Canteen Pre-Order", page_icon="🍲", layout="centered"
+    page_title="Clubhouse Canteen", page_icon="🍲", layout="centered"
 )
 
-# Connect to Google Sheets
+# Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 
-# Helper: Load Menu
 def load_menu():
-  return conn.read(worksheet="menu", ttl="1m")
+  # Set ttl=0 to always get live menu edits
+  return conn.read(worksheet="menu", ttl=0)
 
 
-# Helper: Load Orders
 def load_orders():
   return conn.read(worksheet="orders", ttl=0)
 
 
-# Helper: Generate UPI URL & QR Code
 def create_upi_intent(
     upi_id: str, payee_name: str, amount: float, order_id: str
 ):
   encoded_name = urllib.parse.quote(payee_name)
   upi_url = f"upi://pay?pa={upi_id}&pn={encoded_name}&am={amount:.2f}&tn=Order_{order_id}&cu=INR"
-
   qr = qrcode.make(upi_url)
   buf = io.BytesIO()
   qr.save(buf, format="PNG")
@@ -45,58 +42,80 @@ def create_upi_intent(
 
 
 tab_order, tab_kitchen = st.tabs(
-    ["🛒 Place Pre-Order", "👨‍🍳 Kitchen Dashboard"]
+    ["🛒 Place Order", "👨‍🍳 Kitchen & Menu Management"]
 )
 
 # ====================================================
-# TAB 1: RESIDENTS PRE-ORDER
+# TAB 1: RESIDENT ORDERING (NOW & LATER)
 # ====================================================
 with tab_order:
-  tomorrow = date.today() + timedelta(days=1)
-  st.header(f"Menu for Tomorrow ({tomorrow.strftime('%d %b, %Y')})")
+  st.header("Clubhouse Canteen")
+
+  # Order Timing Selection
+  order_type = st.radio(
+      "When do you want your food?",
+      ["Today (Order Now)", "Tomorrow (Pre-Order)"],
+      horizontal=True,
+  )
+
+  if order_type == "Today (Order Now)":
+    selected_date = date.today()
+    slots = [
+        "Immediate / ASAP (15-20 mins)",
+        "Lunch: 1:00 PM - 2:00 PM",
+        "Snacks: 4:30 PM - 6:00 PM",
+        "Dinner: 7:30 PM - 9:00 PM",
+    ]
+  else:
+    selected_date = date.today() + timedelta(days=1)
+    slots = [
+        "Breakfast: 7:30 AM - 8:15 AM",
+        "Breakfast: 8:15 AM - 9:00 AM",
+        "Lunch: 12:30 PM - 1:30 PM",
+        "Lunch: 1:30 PM - 2:15 PM",
+        "Dinner: 7:30 PM - 8:30 PM",
+    ]
+
+  st.caption(f"📅 Selected Pickup Date: **{selected_date.strftime('%A, %d %B %Y')}**")
 
   with st.expander("Resident & Delivery Details", expanded=True):
     c1, c2 = st.columns(2)
     flat_no = c1.text_input("Flat / Door Number (e.g. A-402)*")
     resident_name = c2.text_input("Your Name*")
     phone = c1.text_input("Mobile Number*")
-    slot = c2.selectbox(
-        "Pickup Time Slot*",
-        [
-            "Breakfast: 7:30 AM - 8:15 AM",
-            "Breakfast: 8:15 AM - 9:00 AM",
-            "Lunch: 12:30 PM - 1:30 PM",
-            "Lunch: 1:30 PM - 2:15 PM",
-            "Dinner: 7:30 PM - 8:30 PM",
-        ],
-    )
+    slot = c2.selectbox("Pickup Time Slot*", slots)
 
-  st.subheader("Select Items")
+  st.subheader("Menu Items")
   try:
     menu_df = load_menu()
+    # Normalize column names in case of whitespace
+    menu_df.columns = [c.strip() for c in menu_df.columns]
     active_items = menu_df[menu_df["active"] == True]
   except Exception as e:
-    st.error("Unable to load menu. Please check Google Sheet connection.")
+    st.error(f"Unable to load menu: {e}")
     active_items = pd.DataFrame()
 
   order_items = {}
   total_bill = 0
 
   if not active_items.empty:
-    for _, row in active_items.iterrows():
-      c_name, c_price, c_qty = st.columns([3, 1, 2])
-      c_name.write(f"**{row['item_name']}** ({row['category']})")
-      c_price.write(f"₹{row['price']}")
-      qty = c_qty.number_input(
-          "Qty",
-          min_value=0,
-          max_value=int(row["daily_cap"]),
-          value=0,
-          key=f"item_{row['id']}",
-      )
-      if qty > 0:
-        order_items[row["item_name"]] = qty
-        total_bill += qty * row["price"]
+    # Group by category (Breakfast, Lunch, Snacks, etc.)
+    categories = active_items["category"].unique()
+    for cat in categories:
+      st.markdown(f"#### {cat}")
+      cat_items = active_items[active_items["category"] == cat]
+
+      for _, row in cat_items.iterrows():
+        c_name, c_price, c_qty = st.columns([3, 1, 2])
+        c_name.write(f"**{row['item_name']}**")
+        c_price.write(f"₹{row['price']}")
+        max_cap = int(row["daily_cap"]) if pd.notna(row["daily_cap"]) else 50
+        qty = c_qty.number_input(
+            "Qty", min_value=0, max_value=max_cap, value=0, key=f"item_{row['id']}"
+        )
+        if qty > 0:
+          order_items[row["item_name"]] = qty
+          total_bill += qty * int(row["price"])
 
   st.divider()
   st.markdown(f"### Total Amount: **₹{total_bill}**")
@@ -108,24 +127,18 @@ with tab_order:
     )
 
     st.subheader("Payment")
-
-    # Mobile direct click-to-pay button
     st.link_button(
-        f"👉 Tap to Pay ₹{total_bill} directly via UPI App",
+        f"👉 Tap to Pay ₹{total_bill} via UPI App",
         upi_url,
         type="primary",
         use_container_width=True,
     )
 
-    # QR Code option for residents on desktop / secondary phone
     with st.expander("Or scan QR Code to pay", expanded=False):
       st.image(qr_bytes, width=180)
       st.caption(f"UPI ID: `{UPI_ID}` | Ref Note: `Order_{order_id}`")
 
-    # Optional UTR / Reference confirmation
-    utr_input = st.text_input(
-        "UPI Reference ID / UTR (Optional, from your payment app)"
-    )
+    utr_input = st.text_input("UPI Reference ID / UTR (Optional)")
 
     if st.button(
         "Confirm & Submit Order", type="primary", use_container_width=True
@@ -134,7 +147,8 @@ with tab_order:
       new_record = pd.DataFrame([{
           "order_id": order_id,
           "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-          "pickup_date": str(tomorrow),
+          "pickup_date": str(selected_date),
+          "order_type": "Now" if "Today" in order_type else "Pre-Order",
           "slot": slot,
           "flat_no": flat_no,
           "name": resident_name,
@@ -151,47 +165,95 @@ with tab_order:
             [existing_orders, new_record], ignore_index=True
         )
         conn.update(worksheet="orders", data=updated_orders)
-        st.success(f"Order #{order_id} placed! Please collect it at {slot}.")
+        st.success(f"Order #{order_id} recorded successfully!")
         st.balloons()
       except Exception as ex:
-        st.error(f"Error recording order: {ex}")
+        st.error(f"Error saving order: {ex}")
   elif total_bill > 0:
-    st.info("Please fill in Flat Number, Name, and Phone above to proceed.")
+    st.info("Please fill in Flat Number, Name, and Mobile Number to place your order.")
 
 # ====================================================
-# TAB 2: KITCHEN DASHBOARD
+# TAB 2: KITCHEN DASHBOARD & IN-APP MENU EDITOR
 # ====================================================
 with tab_kitchen:
-  st.header("Kitchen Production View")
-  admin_pin = st.text_input("Enter Kitchen PIN", type="password")
+  st.header("Kitchen & Menu Control")
+  admin_pin = st.text_input("Enter Admin PIN", type="password")
 
   if admin_pin == ADMIN_PIN:
-    try:
-      orders_df = load_orders()
-      if orders_df.empty or "items" not in orders_df.columns:
-        st.info("No orders recorded yet.")
-      else:
-        tomorrow_str = str(date.today() + timedelta(days=1))
-        active_orders = orders_df[orders_df["pickup_date"] == tomorrow_str]
+    kitchen_tab1, kitchen_tab2 = st.tabs(
+        ["📋 Active Orders & Kitchen Prep", "✏️ Edit / Add Menu Items"]
+    )
 
-        st.subheader(f"Summary for {tomorrow_str}")
-
-        item_counts = {}
-        for entry in active_orders["items"].dropna():
-          for item in str(entry).split(", "):
-            if " x" in item:
-              name, count = item.rsplit(" x", 1)
-              item_counts[name] = item_counts.get(name, 0) + int(count)
-
-        if item_counts:
-          summary_df = pd.DataFrame(
-              list(item_counts.items()), columns=["Item", "Quantity to Cook"]
+    # SUB-TAB A: ORDERS DASHBOARD
+    with kitchen_tab1:
+      try:
+        orders_df = load_orders()
+        if orders_df.empty or "items" not in orders_df.columns:
+          st.info("No orders recorded yet.")
+        else:
+          filter_date = st.date_input(
+              "Filter Orders By Date", value=date.today()
           )
-          st.dataframe(summary_df, use_container_width=True)
+          daily_orders = orders_df[
+              orders_df["pickup_date"] == str(filter_date)
+          ]
 
-        st.subheader("Individual Order Queue")
-        st.dataframe(active_orders, use_container_width=True)
-    except Exception as e:
-      st.error(f"Error reading orders sheet: {e}")
+          st.subheader(f"Quantities to Prepare for {filter_date}")
+
+          item_counts = {}
+          for entry in daily_orders["items"].dropna():
+            for item in str(entry).split(", "):
+              if " x" in item:
+                name, count = item.rsplit(" x", 1)
+                item_counts[name] = item_counts.get(name, 0) + int(count)
+
+          if item_counts:
+            summary_df = pd.DataFrame(
+                list(item_counts.items()), columns=["Item", "Total Quantity"]
+            )
+            st.dataframe(summary_df, use_container_width=True)
+          else:
+            st.write("No items ordered for this date yet.")
+
+          st.subheader("Order Details")
+          st.dataframe(daily_orders, use_container_width=True)
+      except Exception as e:
+        st.error(f"Error loading orders: {e}")
+
+    # SUB-TAB B: IN-APP MENU EDITOR
+    with kitchen_tab2:
+      st.subheader("Manage Menu Items & Prices")
+      st.caption(
+          "Edit values in the table below, toggle availability, or add new rows at the bottom."
+      )
+
+      current_menu = load_menu()
+
+      # Interactive editable table
+      edited_menu = st.data_editor(
+          current_menu,
+          num_rows="dynamic",  # Allows adding/deleting rows
+          use_container_width=True,
+          column_config={
+              "id": st.column_config.NumberColumn("ID", disabled=False),
+              "category": st.column_config.SelectboxColumn(
+                  "Category",
+                  options=["Breakfast", "Lunch", "Snacks", "Dinner", "Beverages"],
+                  required=True,
+              ),
+              "item_name": st.column_config.TextColumn("Item Name", required=True),
+              "price": st.column_config.NumberColumn("Price (₹)", min_value=1, format="₹%d"),
+              "daily_cap": st.column_config.NumberColumn("Stock Limit", min_value=1),
+              "active": st.column_config.CheckboxColumn("Available Today/Tomorrow?", default=True),
+          },
+      )
+
+      if st.button("💾 Save Menu Changes to Google Sheets", type="primary"):
+        try:
+          conn.update(worksheet="menu", data=edited_menu)
+          st.success("Menu updated successfully! Changes are live immediately.")
+        except Exception as e:
+          st.error(f"Failed to update menu: {e}")
+
   elif admin_pin:
     st.error("Incorrect PIN")
