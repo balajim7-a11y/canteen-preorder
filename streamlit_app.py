@@ -22,6 +22,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# Manage state for admin view
+if "is_admin_mode" not in st.session_state:
+  st.session_state.is_admin_mode = False
+
 
 # ====================================================
 # DATABASE & CACHING
@@ -102,18 +106,36 @@ def create_upi_intent(
   return upi_url, buf.getvalue()
 
 
-# ====================================================
-# URL PARAMETER ROUTING (?view=admin)
-# ====================================================
-query_view = st.query_params.get("view", "order").lower()
+# Sidebar Navigation & Access Control
+with st.sidebar:
+  try:
+    st.image("logo.png", width=130)
+  except Exception:
+    st.markdown("### 🍛 TASTY India")
+
+  st.write("---")
+  if st.session_state.is_admin_mode:
+    if st.button("⬅️ Switch to Resident Ordering View"):
+      st.session_state.is_admin_mode = False
+      st.rerun()
+  else:
+    if st.button("🔐 Staff / Kitchen Login"):
+      st.session_state.is_admin_mode = True
+      st.rerun()
 
 # ====================================================
-# SEPARATE VIEW 1: ADMIN & KITCHEN PORTAL (?view=admin)
+# VIEW 1: KITCHEN & ADMIN DASHBOARD
 # ====================================================
-if query_view == "admin":
-  st.title(f"🔐 {BRAND_NAME} — Admin & Kitchen Portal")
+if st.session_state.is_admin_mode:
+  col_title, col_btn = st.columns([4, 1])
+  with col_title:
+    st.title(f"🔐 {BRAND_NAME} — Admin Portal")
+  with col_btn:
+    if st.button("Back to Order Page"):
+      st.session_state.is_admin_mode = False
+      st.rerun()
 
-  admin_pin = st.text_input("Enter Admin PIN", type="password")
+  admin_pin = st.text_input("Enter Admin PIN to Unlock", type="password")
 
   if admin_pin == ADMIN_PIN:
     admin_tab1, admin_tab2 = st.tabs(
@@ -233,7 +255,7 @@ if query_view == "admin":
     st.error("Incorrect PIN")
 
 # ====================================================
-# SEPARATE VIEW 2: RESIDENT ORDERING PORTAL (DEFAULT)
+# VIEW 2: RESIDENT ORDERING PORTAL
 # ====================================================
 else:
   col_logo, col_head = st.columns([1, 4])
@@ -437,3 +459,11 @@ else:
           st.error(f"Error saving order: {ex}")
     elif total_bill > 0:
       st.warning("⚠️ Please fill in Flat No, Name, and Mobile Number.")
+
+  # Discrete staff entry at bottom
+  st.write("---")
+  col_foot, col_staff = st.columns([4, 1])
+  with col_staff:
+    if st.button("🔐 Staff Login"):
+      st.session_state.is_admin_mode = True
+      st.rerun()
